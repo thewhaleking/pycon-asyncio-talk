@@ -124,7 +124,7 @@ class Examples:
         """
         Using queues to manage the data pulling and processing
         """
-        async def consumer(pro_q: asyncio.Queue[asyncio.Task], con_q: asyncio.Queue):
+        async def consumer(pro_q: asyncio.Queue[asyncio.Task[int]], con_q: asyncio.Queue[asyncio.Task[float]]):
             """
             We use `None` in `pro_q` to indicate end
             """
