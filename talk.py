@@ -89,7 +89,9 @@ class Examples:
         """
         async with timeit():
             data, data2 = await asyncio.gather(self.server.get(), self.server.get())
-            await asyncio.gather(asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2))
+            await asyncio.gather(
+                asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2)
+            )
 
     async def restrict_executor(self):
         """
@@ -99,13 +101,18 @@ class Examples:
             loop = asyncio.get_running_loop()
             executor = ThreadPoolExecutor(max_workers=1)
             data, data2 = await asyncio.gather(self.server.get(), self.server.get())
-            await asyncio.gather(loop.run_in_executor(executor, cy_crunch, data), loop.run_in_executor(executor, cy_crunch, data2))
+            await asyncio.gather(
+                loop.run_in_executor(executor, cy_crunch, data),
+                loop.run_in_executor(executor, cy_crunch, data2),
+            )
         input()
         async with timeit():
             # Note we can also assign the executor to the whole loop
             loop.set_default_executor(executor)
             data, data2 = await asyncio.gather(self.server.get(), self.server.get())
-            await asyncio.gather(asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2))
+            await asyncio.gather(
+                asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2)
+            )
         input()
         # there's virtually no speed difference here because we're only using 2 items. Let's increase that
         loop.set_default_executor(None)  # clear the default executor
@@ -119,11 +126,17 @@ class Examples:
             data_list = await asyncio.gather(*[self.server.get() for _ in range(1_000)])
             await asyncio.gather(*[asyncio.to_thread(cy_crunch, d) for d in data_list])
 
+    async def semaphore(self):
+        """
+        Use a semaphore to restrict your throughput
+        """
+        # TODO
 
     async def use_queue(self):
         """
         Using queues to manage the data pulling and processing
         """
+
         async def consumer(pro_q: asyncio.Queue[asyncio.Task], con_q: asyncio.Queue):
             """
             We use `None` in `pro_q` to indicate end
@@ -170,7 +183,9 @@ class Examples:
     async def as_completed(self):
         loop = asyncio.get_running_loop()
         # by giving a set wait time, the tasks will all be received linearly (0 - 9)
-        query_tasks = [loop.create_task(self.server.get(0.5), name=str(i)) for i in range(10)]
+        query_tasks = [
+            loop.create_task(self.server.get(0.5), name=str(i)) for i in range(10)
+        ]
         crunch_tasks = []
         task: asyncio.Task[int]
         print(len(query_tasks))
@@ -180,7 +195,9 @@ class Examples:
         await asyncio.gather(*crunch_tasks)
         input()
         # passing `None` to `self.server.get` gives us a random wait time (0-1)
-        query_tasks = [loop.create_task(self.server.get(None), name=str(i)) for i in range(10)]
+        query_tasks = [
+            loop.create_task(self.server.get(None), name=str(i)) for i in range(10)
+        ]
         crunch_tasks = []
         task: asyncio.Task[int]
         print(len(query_tasks))
@@ -189,6 +206,46 @@ class Examples:
             print("Processing", task.get_name())
             crunch_tasks.append(asyncio.to_thread(cy_crunch, await task))
         await asyncio.gather(*crunch_tasks)
+
+    async def queue_excels(self):
+        loop = asyncio.get_running_loop()
+
+        async def producer(prod_q: asyncio.Queue, con_q: asyncio.Queue):
+            while True:
+                r = await self.server.get()
+                process_ = asyncio.to_thread(cy_crunch, r)
+                await con_q.put(process_)
+
+        async def consumer(
+            con_q: asyncio.Queue[asyncio.Task[int]], send_threshold: int = 1_000
+        ):
+            async def send(data_):
+                await self.server.post(data=data_)
+
+            to_send = []
+            while True:
+                try:
+                    recd = await asyncio.wait_for(con_q.get(), 0.5)
+                    data = await recd
+                    to_send.append(data)
+                except TimeoutError:
+                    if to_send:
+                        await send(to_send)
+                        to_send.clear()
+                    continue
+
+                if len(to_send) >= send_threshold:
+                    await send(to_send)
+                    to_send.clear()
+
+        producer_queue = asyncio.Queue()
+        consumer_queue = asyncio.Queue()
+
+        producer_task = loop.create_task(producer(producer_queue, consumer_queue))
+        consumer_task = loop.create_task(consumer(consumer_queue, send_threshold=1_000))
+
+        # TODO continue example
+
 
 # TODO examples
 # example_7 but sync/non-queue
