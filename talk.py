@@ -1,4 +1,5 @@
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -105,7 +106,7 @@ class Examples:
                 loop.run_in_executor(executor, cy_crunch, data),
                 loop.run_in_executor(executor, cy_crunch, data2),
             )
-        input()
+        input("Waiting")
         async with timeit():
             # Note we can also assign the executor to the whole loop
             loop.set_default_executor(executor)
@@ -113,14 +114,14 @@ class Examples:
             await asyncio.gather(
                 asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2)
             )
-        input()
+        input("Waiting")
         # there's virtually no speed difference here because we're only using 2 items. Let's increase that
         loop.set_default_executor(None)  # clear the default executor
         async with timeit():
             data_list = await asyncio.gather(*[self.server.get() for _ in range(1_000)])
             await asyncio.gather(*[asyncio.to_thread(cy_crunch, d) for d in data_list])
         # that's pretty fast. But we don't want to utilise the breadth of our threads
-        input()
+        input("Waiting")
         async with timeit():
             loop.set_default_executor(executor)
             data_list = await asyncio.gather(*[self.server.get() for _ in range(1_000)])
@@ -130,7 +131,28 @@ class Examples:
         """
         Use a semaphore to restrict your throughput
         """
-        # TODO
+        sema4 = asyncio.Semaphore(20)
+
+        async def fetcher(sem: asyncio.Semaphore | None) -> int:
+            if sem is None:
+                return await self.server.get()
+            else:
+                async with sem:
+                    return await self.server.get()
+
+        print("Without semaphore")
+        async with timeit():
+            tasks = []
+            for _ in range(100):
+                tasks.append(asyncio.create_task(fetcher(None)))
+            await asyncio.gather(*tasks)
+        input("Waiting")
+        print("With semaphore")
+        async with timeit():
+            tasks = []
+            for _ in range(100):
+                tasks.append(asyncio.create_task(fetcher(sema4)))
+            await asyncio.gather(*tasks)
 
     async def use_queue(self):
         """
@@ -142,7 +164,7 @@ class Examples:
             con_q: asyncio.Queue[asyncio.Task[float]],
         ):
             """
-            We use `None` in `pro_q` to indicate end
+            We use `None` in `pro_q` to indicate end (called a 'sentinel')
             """
             while True:
                 data = await pro_q.get()
@@ -170,6 +192,11 @@ class Examples:
             print(f"Completed {len(results)} tasks: {results}")
 
     async def tasks(self):
+        """
+        Using tasks instead of just raw coroutines.
+
+        Tasks begin execution (usually) at the next iteration of the event loop
+        """
         loop = asyncio.get_running_loop()
         async with timeit():
             query_tasks = [loop.create_task(self.server.get()) for _ in range(100)]
@@ -184,6 +211,9 @@ class Examples:
     # Python 3.13+
 
     async def as_completed(self):
+        """
+        Using `as_completed` to perform an action on tasks, as they complete
+        """
         loop = asyncio.get_running_loop()
         # by giving a set wait time, the tasks will all be received linearly (0 - 9)
         query_tasks = [
@@ -196,7 +226,7 @@ class Examples:
             print("Processing", task.get_name())
             crunch_tasks.append(asyncio.to_thread(cy_crunch, await task))
         await asyncio.gather(*crunch_tasks)
-        input()
+        input("Waiting")
         # passing `None` to `self.server.get` gives us a random wait time (0-1)
         query_tasks = [
             loop.create_task(self.server.get(None), name=str(i)) for i in range(10)
@@ -210,17 +240,32 @@ class Examples:
             crunch_tasks.append(asyncio.to_thread(cy_crunch, await task))
         await asyncio.gather(*crunch_tasks)
 
-    async def queue_excels(self):
+    async def queue_excels(self, num_fetchers: int | str = 100):
+        """
+        Queues excel at situations like this where you need to constantly fetch data, but not
+        all at the same time
+
+        :param num_fetchers: Should be determined through your own benchmarking/profiling
+        """
+        num_fetchers = int(num_fetchers)
         loop = asyncio.get_running_loop()
 
-        async def producer(prod_q: asyncio.Queue, con_q: asyncio.Queue):
+        async def producer(
+            prod_q: asyncio.Queue[int | None],
+            con_q: asyncio.Queue[asyncio.Task[int] | None],
+        ) -> None:
             while True:
+                from_q = await prod_q.get()
+                if from_q is None:
+                    print("Producer done")
+                    return None
                 r = await self.server.get()
-                process_ = asyncio.to_thread(cy_crunch, r)
+                process_ = loop.create_task(asyncio.to_thread(cy_crunch, r))
                 await con_q.put(process_)
+                prod_q.task_done()
 
         async def consumer(
-            con_q: asyncio.Queue[asyncio.Task[int]], send_threshold: int = 1_000
+            con_q: asyncio.Queue[asyncio.Task[int] | None], send_threshold: int = 1_000
         ):
             async def send(data_):
                 await self.server.post(data=data_)
@@ -229,8 +274,14 @@ class Examples:
             while True:
                 try:
                     recd = await asyncio.wait_for(con_q.get(), 0.5)
+                    if recd is None:
+                        if to_send:
+                            await send(to_send)
+                        print("Consumer done")
+                        return None
                     data = await recd
                     to_send.append(data)
+                    con_q.task_done()
                 except TimeoutError:
                     if to_send:
                         await send(to_send)
@@ -244,10 +295,21 @@ class Examples:
         producer_queue = asyncio.Queue()
         consumer_queue = asyncio.Queue()
 
-        producer_task = loop.create_task(producer(producer_queue, consumer_queue))
+        producer_tasks = [
+            loop.create_task(producer(producer_queue, consumer_queue))
+            for _ in range(num_fetchers)
+        ]
         consumer_task = loop.create_task(consumer(consumer_queue, send_threshold=1_000))
 
-        # TODO continue example
+        async with timeit():
+            for i in range(1_000):
+                await producer_queue.put(i)
+            for _ in range(num_fetchers):
+                await producer_queue.put(None)
+            for t in producer_tasks:
+                await t
+            await consumer_queue.put(None)
+            await consumer_task
 
 
 # TODO examples
@@ -256,12 +318,26 @@ class Examples:
 
 
 if __name__ == "__main__":
+    import sys
+    import inspect
+
     async_loop = uvloop.new_event_loop()
     asyncio.set_event_loop(async_loop)
     examples = Examples()
-    async_loop.run_until_complete(examples.restrict_executor())
-    # for i in dir(examples):
-    #     if i.startswith("example_"):
-    #         print("running", i)
-    #         async_loop.run_until_complete(getattr(examples, i)())
-    #         print()
+    try:
+        selection = sys.argv[1]
+        coro = getattr(examples, selection)
+        print("Running", selection, coro.__doc__)
+        time.sleep(1)
+        args = sys.argv[2:]
+        async_loop.run_until_complete(coro(*args))
+    except Exception as e:
+        if isinstance(e, IndexError):
+            print(
+                "You forgot the type the name of the example you want. You can choose:"
+            )
+        if isinstance(e, AttributeError):
+            print(f"`{sys.argv[1]}` not recognised")
+        for i in dir(examples):
+            if inspect.iscoroutinefunction(getattr(examples, i)):
+                print(" -", i)
