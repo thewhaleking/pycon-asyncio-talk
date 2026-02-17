@@ -142,17 +142,17 @@ class Examples:
 
         print("Without semaphore")
         async with timeit():
-            tasks = []
-            for _ in range(100):
-                tasks.append(asyncio.create_task(fetcher(None)))
-            await asyncio.gather(*tasks)
+            async with asyncio.TaskGroup() as tg:
+                tasks = set()
+                for _ in range(100):
+                    tasks.add(tg.create_task(fetcher(None)))
         input("Waiting")
         print("With semaphore")
         async with timeit():
-            tasks = []
-            for _ in range(100):
-                tasks.append(asyncio.create_task(fetcher(sema4)))
-            await asyncio.gather(*tasks)
+            async with asyncio.TaskGroup() as tg:
+                tasks = set()
+                for _ in range(100):
+                    tasks.add(tg.create_task(fetcher(sema4)))
 
     async def use_queue(self):
         """
@@ -201,12 +201,14 @@ class Examples:
         async with timeit():
             query_tasks = [loop.create_task(self.server.get()) for _ in range(100)]
             queried = await asyncio.gather(*query_tasks)
-            for i in queried:
-                cy_crunch(i)
+            for task in queried:
+                cy_crunch(task)
         async with timeit():
             query_tasks = [loop.create_task(self.server.get()) for _ in range(100)]
             queried = await asyncio.gather(*query_tasks)
-            await asyncio.gather(*[asyncio.to_thread(cy_crunch, i) for i in queried])
+            await asyncio.gather(
+                *[asyncio.to_thread(cy_crunch, task) for task in queried]
+            )
 
     # Python 3.13+
 
@@ -217,7 +219,7 @@ class Examples:
         loop = asyncio.get_running_loop()
         # by giving a set wait time, the tasks will all be received linearly (0 - 9)
         query_tasks = [
-            loop.create_task(self.server.get(0.5), name=str(i)) for i in range(10)
+            loop.create_task(self.server.get(0.5), name=str(tsk)) for tsk in range(10)
         ]
         crunch_tasks = []
         task: asyncio.Task[int]
@@ -229,7 +231,7 @@ class Examples:
         input("Waiting")
         # passing `None` to `self.server.get` gives us a random wait time (0-1)
         query_tasks = [
-            loop.create_task(self.server.get(None), name=str(i)) for i in range(10)
+            loop.create_task(self.server.get(None), name=str(tsk)) for tsk in range(10)
         ]
         crunch_tasks = []
         task: asyncio.Task[int]
@@ -302,8 +304,8 @@ class Examples:
         consumer_task = loop.create_task(consumer(consumer_queue, send_threshold=1_000))
 
         async with timeit():
-            for i in range(1_000):
-                await producer_queue.put(i)
+            for num in range(1_000):
+                await producer_queue.put(num)
             for _ in range(num_fetchers):
                 await producer_queue.put(None)
             for t in producer_tasks:
