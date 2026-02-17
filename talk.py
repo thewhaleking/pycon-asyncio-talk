@@ -311,6 +311,14 @@ class Examples:
             await consumer_queue.put(None)
             await consumer_task
 
+    async def async_for(self, page_size: int = 10, max_records: int = 100):
+        """
+        Having an interator that automatically runs a next async fetch can be highly useful
+        """
+        records = await self.server.records(page_size, max_records)
+        async for record in records:
+            print(record)
+
 
 # TODO examples
 # example_7 but sync/non-queue
@@ -328,7 +336,7 @@ if __name__ == "__main__":
         selection = sys.argv[1]
         coro = getattr(examples, selection)
         print("Running", selection, coro.__doc__)
-        time.sleep(1)
+        time.sleep(5)
         args = sys.argv[2:]
         async_loop.run_until_complete(coro(*args))
     except Exception as e:
