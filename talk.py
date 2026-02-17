@@ -92,6 +92,9 @@ class Examples:
             await asyncio.gather(asyncio.to_thread(cy_crunch, data), asyncio.to_thread(cy_crunch, data2))
 
     async def restrict_executor(self):
+        """
+        Demonstrates differently using the loop executor
+        """
         async with timeit():
             loop = asyncio.get_running_loop()
             executor = ThreadPoolExecutor(max_workers=1)
@@ -150,38 +153,7 @@ class Examples:
             await consumer_task
             print(f"Completed {len(results)} tasks: {results}")
 
-    async def example_8(self):
-        async def consumer(pro_q: asyncio.Queue[asyncio.Task], con_q: asyncio.Queue):
-            """
-            We use `None` in `pro_q` to indicate end
-            """
-            while True:
-                data = await pro_q.get()
-                if data is None:
-                    break
-                task = loop.create_task(asyncio.to_thread(cy_crunch, await data))
-                pro_q.task_done()
-                await con_q.put(task)
-
-        async with timeit():
-            loop = asyncio.get_running_loop()
-            results = []
-            producer_queue = asyncio.Queue()
-            consumer_queue = asyncio.Queue()
-            consumer_task = loop.create_task(consumer(producer_queue, consumer_queue))
-            for _ in range(101):
-                to_send = loop.create_task(self.server.get())
-                await producer_queue.put(to_send)
-            for idx in range(101):
-                results.append(await (await consumer_queue.get()))
-                if idx == 100:
-                    # to shut it down
-                    await producer_queue.put(None)
-            await consumer_task
-            print(f"Completed {len(results)} tasks: {results}")
-
-
-    async def example_9(self):
+    async def tasks(self):
         loop = asyncio.get_running_loop()
         async with timeit():
             query_tasks = [loop.create_task(self.server.get()) for _ in range(100)]
@@ -195,10 +167,10 @@ class Examples:
 
     # Python 3.13+
 
-    async def example_10(self):
+    async def as_completed(self):
         loop = asyncio.get_running_loop()
-        # by giving a set wait time, the tasks will all be received linerally (0 - 99)
-        query_tasks = [loop.create_task(self.server.get(0.5), name=str(i)) for i in range(100)]
+        # by giving a set wait time, the tasks will all be received linearly (0 - 9)
+        query_tasks = [loop.create_task(self.server.get(0.5), name=str(i)) for i in range(10)]
         crunch_tasks = []
         task: asyncio.Task[int]
         print(len(query_tasks))
@@ -206,11 +178,9 @@ class Examples:
             print("Processing", task.get_name())
             crunch_tasks.append(asyncio.to_thread(cy_crunch, await task))
         await asyncio.gather(*crunch_tasks)
-
-    async def example_11(self):
-        loop = asyncio.get_running_loop()
+        input()
         # passing `None` to `self.server.get` gives us a random wait time (0-1)
-        query_tasks = [loop.create_task(self.server.get(None), name=str(i)) for i in range(100)]
+        query_tasks = [loop.create_task(self.server.get(None), name=str(i)) for i in range(10)]
         crunch_tasks = []
         task: asyncio.Task[int]
         print(len(query_tasks))
