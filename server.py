@@ -1,4 +1,5 @@
 import asyncio
+import time
 import random
 from typing import Any
 
@@ -45,6 +46,13 @@ class Server:
         if wait_time is None:
             wait_time = random.random()
         await asyncio.sleep(wait_time)
+        return random.randint(1_000_000, 1_100_000)
+
+    @staticmethod
+    def sync_get(wait_time: float | None = 0.5) -> int:
+        if wait_time is None:
+            wait_time = random.random()
+        time.sleep(wait_time)
         return random.randint(1_000_000, 1_100_000)
 
     @staticmethod
